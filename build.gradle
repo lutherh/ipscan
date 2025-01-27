@@ -9,14 +9,12 @@ buildscript {
 
 plugins {
     id "java"
+    id "application"
 }
 
 def osName = System.getProperty("os.name")
-def is64 = System.getProperty("os.arch").contains("64")
 def isArm = System.getProperty("os.arch").equals("aarch64")
-def platform = osName.contains("Linux") ? 'linux' + (is64 ? '64' : '32') :
-               osName.contains("Windows") ? 'win' + (is64 ? '64' : '32') :
-               osName.contains("OS X") ? 'mac' + (isArm ? "Arm64" : "X86") : 'unknown'
+def platform = osName.contains("OS X") ? 'mac' + (isArm ? "Arm64" : "X86") : 'unknown'
 
 String exec(def line, String dir = ".", boolean failOnError = true) {
     def proc = Runtime.getRuntime().exec(line, null, project.file(dir))
@@ -24,6 +22,18 @@ String exec(def line, String dir = ".", boolean failOnError = true) {
     else {
         if (failOnError) throw new Exception(line + "\n" + new String(proc.errorStream.readAllBytes()))
         else return null
+    }
+}
+
+application {
+    mainClassName = 'net.azib.ipscan.Main'
+}
+
+tasks.named('run') {
+    doFirst {
+        if (org.gradle.internal.os.OperatingSystem.current().isMacOsX()) {
+            jvmArgs '-XstartOnFirstThread'
+        }
     }
 }
 
@@ -50,34 +60,25 @@ repositories {
 }
 
 configurations {
-    jna
-    any
-    linux64
-    win64.extendsFrom(jna)
     macX86
     macArm64
 
-    // compile and test with current platform's SWT and JNA
-    compileOnly.extendsFrom(getAt(platform), jna)
+    compileOnly.extendsFrom(getAt(platform))
     testImplementation.extendsFrom(compileOnly)
     runtimeClasspath.extendsFrom(compileOnly)
-    all*.exclude module: 'org.eclipse.swt' // transitive dependency in Maven that fails
+    all*.exclude module: 'org.eclipse.swt'
 }
 
 dependencies {
     def swtVersion = '3.123.0'
-    linux64 "org.eclipse.platform:org.eclipse.swt.gtk.linux.x86_64:${swtVersion}"
-    win64 "org.eclipse.platform:org.eclipse.swt.win32.win32.x86_64:${swtVersion}"
     macX86 "org.eclipse.platform:org.eclipse.swt.cocoa.macosx.x86_64:${swtVersion}"
     macArm64 "org.eclipse.platform:org.eclipse.swt.cocoa.macosx.aarch64:${swtVersion}"
-    jna 'net.java.dev.jna:jna:5.9.0'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-core:2.23.0'
 }
 
 test {
     if (platform.startsWith("mac")) {
-        // jvmArgs "-XstartOnFirstThread"
         println("WARNING: tests that touch GUI will fail on Mac due to Cocoa restrictions and Gradle unable to run tests on main thread")
         filter {
             includeTestsMatching "net.azib.ipscan.core.net.*"
@@ -89,57 +90,38 @@ def packageTask(String platform, Closure doMore) {
     return tasks.create(platform, Jar) {
         dependsOn = ['classes']
         manifest {
-           attributes 'Implementation-Title': 'Angry IP Scanner',
-               'Implementation-Version': version,
-               'Main-Class': 'net.azib.ipscan.Main',
-               'Class-Path': platform == "any" ? "/usr/share/java/swt4.jar /usr/lib/eclipse/swt.jar ./" : "./",
-               'Title': 'Angry IP Scanner',
-               'Version': version,
-               'Build-Date': java.time.LocalDate.now().toString(),
-               'URL': 'https://angryip.org/'
+            attributes 'Implementation-Title': 'Angry IP Scanner',
+                    'Implementation-Version': version,
+                    'Main-Class': 'net.azib.ipscan.Main',
+                    'Class-Path': "./",
+                    'Title': 'Angry IP Scanner',
+                    'Version': version,
+                    'Build-Date': java.time.LocalDate.now().toString(),
+                    'URL': 'https://angryip.org/'
         }
         archiveBaseName.set(project.name + '-' + platform)
         from {
-           configurations[platform].collect {
-               it.isDirectory() ? it : zipTree(it)
-           }
+            configurations[platform].collect {
+                it.isDirectory() ? it : zipTree(it)
+            }
         }
         exclude(
-           'images/**/*.svg',
-           'META-INF/ECLIPSE*',
-           'about_files/*',
-           'version.txt',
-           '.api_description',
-           'about.html',
-           'fragment.properties',
-           'chrome.manifest',
-           // Linux/GTK
-           'libswt-awt-gtk-*.so',
-           'libswt-glx-gtk-*.so',
-           'libswt-webkit-gtk-*.so',
-           'webkitextensions*/*',
-           // Win32
-           'swt-awt-*.dll',
-           'swt-wgl-*.dll',
-           'swt-gdip-*.dll',
-           'swt-webkit-*.dll',
-           // Mac
-           'libswt-awt-*.jnilib',
-            // JNA
-            'com/sun/jna/*/*.a',
-            'com/sun/jna/*/*.so',
-            'com/sun/jna/*/*.jnilib',
-            "com/sun/jna/win32-${platform == 'win32' ? 'x86-64' : platform == 'win64' ? 'x86' : '*'}/*.dll",
-            // Win-specific stuff
-            !platform.startsWith('win') ? 'net/azib/ipscan/core/net/Win*' : '',
-            !platform.startsWith('win') ? 'net/azib/ipscan/fetchers/Win*' : ''
+                'images/**/*.svg',
+                'META-INF/ECLIPSE*',
+                'about_files/*',
+                'version.txt',
+                '.api_description',
+                'about.html',
+                'fragment.properties',
+                'chrome.manifest',
+                'libswt-awt-*.jnilib',
+                'com/sun/jna/*/*.a',
+                'com/sun/jna/*/*.so',
+                'com/sun/jna/*/*.jnilib'
         )
         with jar
 
-        if (platform != "any")
-            finalizedBy minimizeTask(platform, doMore)
-        else
-            doLast(doMore)
+        finalizedBy minimizeTask(platform, doMore)
     }
 }
 
@@ -157,7 +139,7 @@ def minimizeTask(String platform, Closure doMore) {
         configuration 'ext/jna.pro'
 
         def keepClasses = [
-            'net.azib.ipscan.**',
+                'net.azib.ipscan.**',
         ]
 
         for (keepClass in keepClasses) {
@@ -171,50 +153,6 @@ def minimizeTask(String platform, Closure doMore) {
             doMore()
         }
     }
-}
-
-def winLauncher(def platform) {
-    ant.concat(destfile: "build/libs/${project.name}-${platform}-${version}.exe", binary: true) {
-        ant.fileset(file: "ext/win-launcher/launcher.exe")
-        ant.fileset(file: "build/libs/${project.name}-${platform}-${version}.jar")
-    }
-    ant.delete(file: "build/libs/${project.name}-${platform}-${version}.jar")
-}
-
-def deb(def platform, def arch, def moreDeps = '') {
-    def dist = buildDir.path + "/libs/deb"
-    ant.mkdir(dir: dist)
-    ant.copy(todir: dist) {
-        ant.fileset(dir: "ext/deb-bundle")
-    }
-    ant.copy(file: "build/libs/${project.name}-${platform}-${version}.jar", todir: "${dist}/usr/lib/ipscan")
-    ant.copy(file: "resources/images/icon128.png", tofile: "${dist}/usr/share/pixmaps/ipscan.png")
-
-    ant.replace(file: "${dist}/DEBIAN/control") {
-        ant.replacefilter(token: "VERSION", value: version)
-        ant.replacefilter(token: "ARCH", value: arch)
-        ant.replacefilter(token: "DEPENDS ", value: moreDeps)
-    }
-
-    exec("chmod +x usr/bin/ipscan usr/lib/ipscan/${project.name}-${platform}-${version}.jar", dist)
-    exec("fakeroot dpkg-deb -Zxz -b deb ${project.name}_${version}_${arch}.deb", "$dist/..")
-    ant.delete(dir: dist)
-}
-
-def rpm(def platform, def arch) {
-    def dist = buildDir.path + '/libs/rpm'
-    def rpmVersion = version.replace('-', '.')
-    ant.mkdir(dir: dist)
-    ant.copy(todir: dist) {
-        ant.fileset(dir: "ext/rpmbuild")
-    }
-    ant.replace(file: "${dist}/SPECS/ipscan.spec") {
-        ant.replacefilter(token: "RPM_VERSION", value: rpmVersion)
-        ant.replacefilter(token: "VERSION", value: version)
-    }
-    exec(new String[] {"sh", "-c", "rpmbuild --target ${arch} --define \"_topdir ${new File(dist).absolutePath}\" --define \"platform ${platform}\" -bb SPECS/ipscan.spec"}, dist)
-    ant.move(file: "${dist}/RPMS/${arch}/ipscan-${rpmVersion}-1.${arch}.rpm", todir:'build/libs')
-    ant.delete(dir: dist)
 }
 
 def macLauncher(def platform) {
@@ -241,27 +179,12 @@ def macLauncher(def platform) {
     exec("zip -R $zipName * -x*.zip", dist)
 
     if (System.getenv("APPLE_USER")) {
-        // TODO: codesign --sign Example --options runtime --entitlements test/test.entitlements --force build/Release/test.app
-        // TODO: https://developer.apple.com/documentation/xcode/notarizing_macos_software_before_distribution/customizing_the_notarization_workflow
         println("Sending zip file to Apple for notarization")
         exec("xcrun altool --list-providers --username ${System.getenv("APPLE_USER")} --password ${System.getenv("APPLE_PASSWORD")}", ".", false)
         exec("xcrun altool --notarize-app --primary-bundle-id net.azib.ipscan.zip --username ${System.getenv("APPLE_USER")} --password ${System.getenv("APPLE_PASSWORD")} --file ${zipName}", ".", false)
     }
 
     ant.delete(dir: "${dist}/${name}.app")
-}
-
-packageTask('linux64') {
-    deb('linux64', 'amd64')
-    rpm('linux64', 'x86_64')
-}
-
-packageTask('any') {
-    deb('any', 'all', 'libswt-gtk-4-java, libswt-cairo-gtk-4-jni,')
-}
-
-packageTask('win64') {
-    winLauncher('win64')
 }
 
 packageTask('macX86') {
@@ -281,36 +204,8 @@ def jlink(String target, String jrePath, String extraOpts = System.getenv("JLINK
     }
 }
 
-task 'win-installer'(dependsOn: 'win64') {
-    doLast {
-        def nsisVersion = "3.08"
-        def nsis = "nsis-$nsisVersion"
-        def installerDir = 'ext/win-installer'
-        ant.get(src: "https://sourceforge.net/projects/nsis/files/NSIS%203/${nsisVersion}/${nsis}.zip/download", dest: "$installerDir/${nsis}.zip", skipexisting: 'true')
-        ant.unzip(src: "${installerDir}/${nsis}.zip", dest: installerDir)
-        ant.replace(file: "${installerDir}/InstallerConfig.nsh") {
-            ant.replacefilter(token: "VERSION_MINOR", value: "8")
-            ant.replacefilter(token: "VERSION", value: version)
-        }
-        jlink(installerDir, "AppFiles/jre")
-        ant.copy(file: "resources/images/icon.ico", todir: "${installerDir}/AppFiles")
-        ant.copy(file: "LICENSE", tofile: "${installerDir}/AppFiles/license.txt")
-        ant.copy(file: "build/libs/${project.name}-win64-${version}.exe", tofile:"${installerDir}/AppFiles/ipscan.exe")
-        if (platform.startsWith('win')) {
-            exec("cmd /c $nsis\\makensis.exe Installer\\Installer.nsi", installerDir)
-        }
-        else {
-            println("Building of Windows Installer is not supported on other platforms")
-            exec("wine $nsis/makensis.exe Installer/Installer.nsi", installerDir)
-        }
-        ant.move(file: "${installerDir}/ipscan-$version-setup.exe", todir: "build/libs")
-        exec("git checkout ${installerDir}/InstallerConfig.nsh")
-    }
-}
-
 task mac(dependsOn: ['macX86', 'macArm64'])
 
-task linux(dependsOn: ['any', 'linux64'])
 task current(dependsOn: [platform])
 
 task info {
@@ -318,14 +213,9 @@ task info {
         println "This script will build ${project.name} ${version}"
         println "Targets:"
         println "  current       - build for current platform ($platform)"
-        println "  linux         - builds all Linux binaries"
-        println "  linux64       - builds only Linux 64-bit binary"
-        println "  any           - doesn't bundle SWT, making it possible to run on ARM/Raspbian with libswt provided by OS (Experimental)"
         println "  mac           - builds all Mac binaries"
         println "  macX86        - builds only MacX86 binary"
         println "  macArm64      - builds only MacArm64 binary"
-        println "  win64         - builds only Windows 64-bit binary"
-        println "  win-installer - packages a Windows installer (with included JRE)"
     }
 }
 
